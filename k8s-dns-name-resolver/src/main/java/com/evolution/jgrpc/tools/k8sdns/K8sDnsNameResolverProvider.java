@@ -10,34 +10,6 @@ import java.net.URI;
 import java.util.Objects;
 import org.jspecify.annotations.Nullable;
 
-/// **
-// * A provider for [[K8sDnsNameResolver]].
-// * <p>
-// * It is an alternative to the stock io.grpc.internal.DnsNameResolver geared towards better
-// support
-// * for resolving addresses of Kubernetes headless service pods by hostname.
-// * <p>
-// * The main improvement over `DnsNameResolver` is that this resolver implements live watching of
-// the
-// * set of ready pods and notifies the channel when it changes.
-// * <p>
-// * This resolver uses the `dnsjava` library for executing queries instead of the JDK built-in
-// * capabilities. This allows executing DNS queries with caching disabled without changing JVM-wide
-// * settings.
-// * <p>
-// * DNS queries are repeated every 15 seconds by default. The interval can be adjusted using
-// * [[setRefreshIntervalSeconds]].
-// * <p>
-// * Only A-records are supported.
-// * <p>
-// * Example target URIs: - `k8s-dns:///my-svc.my-namespace.svc.my-cluster.local` - default port -
-// * `k8s-dns:///my-svc.my-namespace.svc.my-cluster.local:8080`
-// * <p>
-// * This class is thread-safe.
-// *
-// * @see [[io.grpc.internal.DnsNameResolverProvider]] [[io.grpc.internal.DnsNameResolver]]
-// */
-
 /**
  * {@link NameResolverProvider} for DNS-based GRPC service discovery in Kubernetes.
  *
