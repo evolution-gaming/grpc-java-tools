@@ -143,6 +143,7 @@ import org.xbill.DNS.lookup.LookupSession;
   private void handleResolutionSuccess(List<InetAddress> addresses) {
     // do not notify if addresses didn't change
     if (this.lastSuccessfulResult == null
+        // the addresses list is always sorted here and contains only unique values
         || !this.lastSuccessfulResult.addresses.equals(addresses)) {
       var addrGroups = addresses.stream().map(this::mkAddressGroup).toList();
       getListener().onAddresses(addrGroups, Attributes.EMPTY);
@@ -167,6 +168,8 @@ import org.xbill.DNS.lookup.LookupSession;
                   Optional.ofNullable(result).map(LookupResult::getRecords).orElse(List.of());
               return records.stream()
                   .map(Record::rdataToString)
+                  .distinct()
+                  .sorted() // make sure that result comparison does not depend on order
                   .map(InetAddresses::forString)
                   .toList();
             })
