@@ -1,0 +1,23 @@
+services:
+  test-server1:
+    &test-app
+    build: ../../../target/docker/stage
+    environment:
+      TEST_SVC_RUN_MODE: server
+      TEST_SVC_INSTANCE_ID: 1
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 200M
+
+  test-server2:
+    <<: *test-app
+    environment:
+      TEST_SVC_RUN_MODE: server
+      TEST_SVC_INSTANCE_ID: 2
+
+  test-client:
+    <<: *test-app
+    environment:
+      TEST_SVC_RUN_MODE: client

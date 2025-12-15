@@ -1,0 +1,13 @@
+syntax = "proto2";
+
+package k8sdns.it;
+
+service TestSvc {
+  rpc GetId (GetIdRequest) returns (GetIdReply) {}
+}
+
+message GetIdRequest {}
+
+message GetIdReply {
+  required int32 id = 1;
+}
