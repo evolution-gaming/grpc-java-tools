@@ -139,6 +139,7 @@ object TestAppShared {
     val values: Vector[TestClientTestCase] = Vector(
       DiscoverNewPod,
       DnsFailureRecover,
+      ResolveShortDomainName,
     )
 
     /**
@@ -165,5 +166,14 @@ object TestAppShared {
      *   - check that after the configured reload TTL, the client sees both servers
      */
     case object DnsFailureRecover extends TestClientTestCase
+
+    /**
+     * [[TestClient]] test case verifying that `K8sDnsNameResolver` resolves short k8s
+     * service domain names using resolv.conf search domains.
+     *
+     * Why this needs a separate test case:
+     * [[com.evolution.jgrpc.tools.k8sdns.NameLookupState]]
+     */
+    case object ResolveShortDomainName extends TestClientTestCase
   }
 }

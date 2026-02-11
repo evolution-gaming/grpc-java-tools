@@ -63,6 +63,8 @@ private[it] final class TestClient {
                 testCaseDiscoverNewPod(fixture)
               case TestClientTestCase.DnsFailureRecover =>
                 testCaseDnsFailureRecover(fixture)
+              case TestClientTestCase.ResolveShortDomainName =>
+                testCaseResolveShortDomainName(fixture)
             }
           }
 
@@ -86,22 +88,22 @@ private[it] final class TestClient {
   private def testCaseDiscoverNewPod(fixture: Fixture): Unit = {
     fixture.coreDns.ensureStarted(serviceIps = Set(fixture.srv1Ip))
 
-    withRoundRobinLbClient { client =>
-      callHost2TimesAssertServerIds(client, expectedServerIds = Set(1))
+    withRoundRobinLbClient() { client =>
+      callHostManyTimesAssertServerIds(client, expectedServerIds = Set(1))
 
       fixture.coreDns.setServiceIps(Set(fixture.srv1Ip, fixture.srv2Ip))
 
       sleepUntilClientGetsDnsUpdate()
 
-      callHost2TimesAssertServerIds(client, expectedServerIds = Set(1, 2))
+      callHostManyTimesAssertServerIds(client, expectedServerIds = Set(1, 2))
     }
   }
 
   private def testCaseDnsFailureRecover(fixture: Fixture): Unit = {
     fixture.coreDns.ensureStarted(serviceIps = Set(fixture.srv1Ip))
 
-    withRoundRobinLbClient { client =>
-      callHost2TimesAssertServerIds(client, expectedServerIds = Set(1))
+    withRoundRobinLbClient() { client =>
+      callHostManyTimesAssertServerIds(client, expectedServerIds = Set(1))
 
       fixture.coreDns.ensureStopped()
 
@@ -111,7 +113,15 @@ private[it] final class TestClient {
 
       sleepUntilClientGetsDnsUpdate()
 
-      callHost2TimesAssertServerIds(client, expectedServerIds = Set(1, 2))
+      callHostManyTimesAssertServerIds(client, expectedServerIds = Set(1, 2))
+    }
+  }
+
+  private def testCaseResolveShortDomainName(fixture: Fixture): Unit = {
+    fixture.coreDns.ensureStarted(serviceIps = Set(fixture.srv1Ip, fixture.srv2Ip))
+
+    withRoundRobinLbClient(targetHostname = svcHostnameShort) { client =>
+      callHostManyTimesAssertServerIds(client, expectedServerIds = Set(1, 2))
     }
   }
 
@@ -125,21 +135,44 @@ private[it] final class TestClient {
     Thread.sleep(sleepIntervalSeconds.toLong * 1000)
   }
 
-  private def callHost2TimesAssertServerIds(
+  private def callHostManyTimesAssertServerIds(
     client: TestSvcBlockingStub,
     expectedServerIds: Set[Int],
   ): Unit = {
-    val actualServerIds = 0.until(2).map { _ =>
+    require(expectedServerIds.subsetOf(allServerIds))
+
+    var observedServerIdsVec: Vector[Int] = Vector.fill(allServerIds.size) {
       client.getId(GetIdRequest()).id
-    }.toSet
-    if (actualServerIds != expectedServerIds) {
-      sys.error(s"GRPC client observed server IDs $actualServerIds, expected $expectedServerIds")
+    }
+
+    // When the client is just establishing connections, sometimes calling it multiple times
+    // doesn't give the round-robin call picture (1, 2, 1, 2,...),
+    // but it appears as if the client
+    // routes all the calls to the first opened connection,
+    // while waiting for the rest to be fully ready.
+    // So if we haven't observed all the servers yet, let's wait a bit and call again.
+    // This helps to recover such cases.
+    if (observedServerIdsVec.toSet.size < allServerIds.size) {
+      Thread.sleep(1000L)
+      observedServerIdsVec = observedServerIdsVec ++ Vector.fill(allServerIds.size) {
+        client.getId(GetIdRequest()).id
+      }
+    }
+
+    val observedServerIds = observedServerIdsVec.toSet
+    if (observedServerIds != expectedServerIds) {
+      sys.error(s"GRPC client expected server IDs $expectedServerIds, " +
+        s"observed $observedServerIds (received in order: $observedServerIdsVec)")
     }
   }
 
-  private def withRoundRobinLbClient[T](body: TestSvcBlockingStub => T): T = {
+  private def withRoundRobinLbClient[T](
+    targetHostname: String = svcHostname,
+  )(
+    body: TestSvcBlockingStub => T,
+  ): T = {
     val channel = NettyChannelBuilder
-      .forTarget(s"k8s-dns://$svcHostname:${ TestAppShared.ServerPort }")
+      .forTarget(s"k8s-dns://$targetHostname:${ TestAppShared.ServerPort }")
       .usePlaintext()
       .defaultLoadBalancingPolicy("round_robin")
       .build()
@@ -156,7 +189,10 @@ private[it] final class TestClient {
 }
 
 private object TestClient {
-  private val svcHostname: String = "svc.example.org"
+  private val allServerIds = Set(1, 2)
+  private val clusterHostnameSuffix = "svc.cluster.local"
+  private val svcHostnameShort = "acme-grpc.acme"
+  private val svcHostname = s"$svcHostnameShort.$clusterHostnameSuffix"
   private val resolveConfPath = "/etc/resolv.conf"
 
   private val coreDnsCoreFilePath = "/etc/coredns/CoreFile"
@@ -178,6 +214,8 @@ private object TestClient {
       Paths.get(resolveConfPath),
       Vector(
         "nameserver 127.0.0.1",
+        s"search $clusterHostnameSuffix",
+        "options ndots:5",
       ).asJava,
       StandardOpenOption.TRUNCATE_EXISTING,
     )
@@ -224,7 +262,7 @@ private object TestClient {
     private def writeCoreFile(): Unit = {
       Files.writeString(
         Paths.get(coreDnsCoreFilePath),
-        s"""$svcHostname {
+        s""". {
            |    hosts $coreDnsHostsFilePath {
            |        ttl $coreDnsHostsReloadIntervalSeconds
            |        reload ${ coreDnsHostsReloadIntervalSeconds }s

@@ -72,6 +72,10 @@ class K8sDnsNameResolverIt extends AnyFreeSpec with BeforeAndAfterAll {
     "should recover after DNS query failure" in {
       runTestCase(TestClientTestCase.DnsFailureRecover)
     }
+
+    "should resolve short domain names with search domains" in {
+      runTestCase(TestClientTestCase.ResolveShortDomainName)
+    }
   }
 
   private def runTestCase(testCase: TestClientTestCase): Unit = {

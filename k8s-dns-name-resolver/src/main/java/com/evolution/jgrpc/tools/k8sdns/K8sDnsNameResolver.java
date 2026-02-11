@@ -3,7 +3,6 @@ package com.evolution.jgrpc.tools.k8sdns;
 import static java.lang.Math.max;
 import static java.lang.String.format;
 
-import com.google.common.net.InetAddresses;
 import io.grpc.*;
 import io.grpc.SynchronizationContext.ScheduledHandle;
 import java.net.InetAddress;
@@ -12,18 +11,12 @@ import java.net.UnknownHostException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import org.jspecify.annotations.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.xbill.DNS.Name;
-import org.xbill.DNS.Record;
-import org.xbill.DNS.Type;
-import org.xbill.DNS.lookup.LookupResult;
-import org.xbill.DNS.lookup.LookupSession;
 
 /* package */ final class K8sDnsNameResolver extends NameResolver {
 
@@ -33,7 +26,8 @@ import org.xbill.DNS.lookup.LookupSession;
   private final long refreshIntervalSeconds;
   private final SynchronizationContext syncCtx;
   private final ScheduledExecutorService scheduledExecutor;
-  private final LookupSession dnsLookupSession;
+
+  private NameLookupState nameLookupState;
 
   @Nullable private Listener listener = null;
 
@@ -52,8 +46,7 @@ import org.xbill.DNS.lookup.LookupSession;
     this.refreshIntervalSeconds = refreshIntervalSeconds;
     this.syncCtx = syncCtx;
     this.scheduledExecutor = scheduledExecutor;
-    this.dnsLookupSession =
-        LookupSession.defaultBuilder().searchPath(targetUri.host()).clearCaches().build();
+    this.nameLookupState = NameLookupState.initialize(targetUri.host());
   }
 
   @Override
@@ -159,28 +152,21 @@ import org.xbill.DNS.lookup.LookupSession;
   // callback is executed under syncCtx
   private void resolveAllAsync(
       BiConsumer<@Nullable List<InetAddress>, ? super @Nullable Throwable> cb) {
-    final var dnsLookupAsyncResult = this.dnsLookupSession.lookupAsync(Name.empty, Type.A);
-    dnsLookupAsyncResult
-        .thenApply(
-            (result) -> {
-              logger.debug("DNS lookup result: {}", result);
-              var records =
-                  Optional.ofNullable(result).map(LookupResult::getRecords).orElse(List.of());
-              return records.stream()
-                  .map(Record::rdataToString)
-                  .distinct()
-                  .sorted() // make sure that result comparison does not depend on order
-                  .map(InetAddresses::forString)
-                  .toList();
-            })
+    nameLookupState
+        .runNextLookup()
         .whenComplete(
-            (addresses, err) ->
+            (nameLookupState, err) ->
                 this.syncCtx.execute(
                     () -> {
                       if (err != null) {
                         logger.error("DNS lookup failed", err);
+                        cb.accept(null, err);
+                      } else {
+                        this.nameLookupState = nameLookupState;
+                        logger.debug(
+                            "DNS lookup successful {}", this.nameLookupState.getLastResult());
+                        cb.accept(this.nameLookupState.getLastResult(), null);
                       }
-                      cb.accept(addresses, err);
                     }));
   }
 
