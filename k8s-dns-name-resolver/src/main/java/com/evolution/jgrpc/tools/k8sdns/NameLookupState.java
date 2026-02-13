@@ -102,7 +102,7 @@ import org.xbill.DNS.lookup.LookupSession;
 
   public CompletionStage<NameLookupState> runNextLookup() {
     if (discoveredAbsoluteName != null) {
-      return lookupByAbsoluteName(discoveredAbsoluteName).thenApply((this::copyWithResult));
+      return lookupByAbsoluteName(discoveredAbsoluteName).thenApply(this::copyWithResult);
     } else {
       var primaryName = concatFailIfInvalid(name, Name.root);
       return lookupByAbsoluteName(primaryName)
