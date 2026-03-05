@@ -34,6 +34,7 @@ import org.slf4j.LoggerFactory;
   @Nullable private ScheduledHandle scheduledRefreshTask = null;
   @Nullable private SuccessResult lastSuccessfulResult = null;
   private boolean refreshing = false;
+  private boolean isShuttingDown = false;
 
   private record SuccessResult(List<InetAddress> addresses, Instant receiveTime) {}
 
@@ -56,6 +57,7 @@ import org.slf4j.LoggerFactory;
 
   @Override
   public void shutdown() {
+    this.isShuttingDown = true;
     if (this.scheduledRefreshTask != null) {
       this.scheduledRefreshTask.cancel();
     }
@@ -95,12 +97,15 @@ import org.slf4j.LoggerFactory;
   }
 
   private void refreshInner() {
-    if (!this.refreshing) {
+    if (!this.refreshing && !this.isShuttingDown) {
       this.refreshing = true;
       resolveAllAsync(
           (addresses, err) -> {
             try {
-              if (err != null) {
+              if (this.isShuttingDown
+                  || err instanceof NameLookupState.LookupFailedJvmShutdownException) {
+                handleResolutionResultDuringShutdown();
+              } else if (err != null) {
                 handleResolutionFailure(err);
               } else if (addresses != null && !addresses.isEmpty()) {
                 handleResolutionSuccess(addresses);
@@ -113,6 +118,16 @@ import org.slf4j.LoggerFactory;
               this.refreshing = false;
             }
           });
+    }
+  }
+
+  private void handleResolutionResultDuringShutdown() {
+    logger.info(
+        "Received resolution result during shutdown, "
+            + "ignoring and cancelling future refresh attempts");
+    if (this.scheduledRefreshTask != null) {
+      this.scheduledRefreshTask.cancel();
+      this.scheduledRefreshTask = null;
     }
   }
 
@@ -159,7 +174,15 @@ import org.slf4j.LoggerFactory;
                 this.syncCtx.execute(
                     () -> {
                       if (err != null) {
-                        logger.error("DNS lookup failed", err);
+                        if (err instanceof NameLookupState.LookupFailedJvmShutdownException) {
+                          // lower the level below INFO if it's caused by JVM shutdown
+                          // to keep the shutdown logs clean;
+                          // the error log statement is not actionable in this case
+                          logger.debug(
+                              "DNS lookup failed due to JVM shutdown, nothing to do here", err);
+                        } else {
+                          logger.error("DNS lookup failed", err);
+                        }
                         cb.accept(null, err);
                       } else {
                         this.nameLookupState = nameLookupState;

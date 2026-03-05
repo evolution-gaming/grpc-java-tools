@@ -1,12 +1,14 @@
 package com.evolution.jgrpc.tools.k8sdns;
 
 import com.google.common.net.InetAddresses;
+import java.io.Serial;
 import java.net.InetAddress;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 import org.jspecify.annotations.Nullable;
 import org.xbill.DNS.Name;
@@ -155,16 +157,34 @@ import org.xbill.DNS.lookup.LookupSession;
   }
 
   private CompletionStage<List<InetAddress>> lookupByAbsoluteName(Name name) {
-    return session
-        .lookupAsync(name, Type.A)
-        .thenApply(
-            (res) ->
-                Optional.ofNullable(res).map(LookupResult::getRecords).orElse(List.of()).stream()
-                    .map(Record::rdataToString)
-                    .distinct()
-                    .sorted() // make sure that result comparison does not depend on order
-                    .map(InetAddresses::forString)
-                    .toList());
+    CompletionStage<LookupResult> lookupAsyncResult;
+    try {
+      lookupAsyncResult = session.lookupAsync(name, Type.A);
+    } catch (Exception e) {
+      if (messageContainsIgnoreCase(e, "Shutdown in progress")
+          // double-checking that we are in the middle of JVM shutdown process;
+          // check LookupFailedJvmShutdownException description for details
+          && JvmShutdownDetector.isJvmShutdownDetected()) {
+        lookupAsyncResult = CompletableFuture.failedFuture(new LookupFailedJvmShutdownException());
+      } else {
+        lookupAsyncResult = CompletableFuture.failedFuture(e);
+      }
+    }
+    return lookupAsyncResult.thenApply(
+        (res) ->
+            Optional.ofNullable(res).map(LookupResult::getRecords).orElse(List.of()).stream()
+                .map(Record::rdataToString)
+                .distinct()
+                .sorted() // make sure that result comparison does not depend on order
+                .map(InetAddresses::forString)
+                .toList());
+  }
+
+  private static boolean messageContainsIgnoreCase(Throwable t, String str) {
+    if (t.getMessage() == null) {
+      return false;
+    }
+    return t.getMessage().toLowerCase().contains(str.toLowerCase());
   }
 
   // org.xbill.DNS.lookup.LookupSession.safeConcat
@@ -181,6 +201,86 @@ import org.xbill.DNS.lookup.LookupSession;
       return Name.concatenate(name, suffix);
     } catch (NameTooLongException e) {
       throw new RuntimeException(e);
+    }
+  }
+
+  /**
+   * Indicates that a DNS lookup failed due to JVM being in the process of shutdown.
+   *
+   * <p>This is a separate exception so the client code can lower the log level for this kind of
+   * errors to keep the app shutdown logs clean.
+   *
+   * <p>Why such error could happen in {@link K8sDnsNameResolver}:
+   *
+   * <ul>
+   *   <li>When dnsjava's <code>LookupSession.lookupAsync</code> tries to establish a new DNS server
+   *       connection after the JVM shutdown has already started. It could happen because JVM
+   *       shutdown hooks are executed in unpredictable order.
+   *   <li>Under the hood, that function tries to register a JVM shutdown hook to clean up NIO
+   *       resources.
+   *   <li>Registering a shutdown hook during the shutdown sequence results in <code>
+   *       java.lang.IllegalStateException: Shutdown in progress</code>
+   *   <li>This exception is not reported as a failure case in the <code>LookupSession.lookupAsync
+   *       </code> result completion stage but is thrown directly on the method call
+   *   <li>If not caught, this error propagates to Netty internals , resulting in a scary "Panic!
+   *       This is a bug!" log message written to JUL by Netty internals
+   * </ul>
+   */
+  /* package */ static final class LookupFailedJvmShutdownException extends RuntimeException {
+
+    @Serial private static final long serialVersionUID = 1L;
+  }
+
+  /**
+   * A hack to detect if we are in the middle of JVM shutdown.
+   *
+   * <p>Shouldn't be called on a hot code path.
+   *
+   * <p>Check out {@link LookupFailedJvmShutdownException} for explanation why it's needed.
+   */
+  private static final class JvmShutdownDetector {
+
+    private static volatile boolean JVM_SHUTDOWN_DETECTED = false;
+    private static final ReentrantLock RUNTIME_POKE_LOCK = new ReentrantLock();
+
+    public static boolean isJvmShutdownDetected() {
+      // serializing access to the actual detection method (pokeRuntimeIsInShutdown)
+      // and caching the positive result to ensure we do not overload the JVM internal state
+      if (JVM_SHUTDOWN_DETECTED) {
+        return true;
+      } else {
+        RUNTIME_POKE_LOCK.lock();
+        try {
+          if (JVM_SHUTDOWN_DETECTED) {
+            return true;
+          }
+          JVM_SHUTDOWN_DETECTED = pokeRuntimeIsInShutdown();
+          return JVM_SHUTDOWN_DETECTED;
+        } finally {
+          RUNTIME_POKE_LOCK.unlock();
+        }
+      }
+    }
+
+    private static boolean pokeRuntimeIsInShutdown() {
+      var hook = new Thread(() -> {});
+      try {
+        Runtime.getRuntime().addShutdownHook(hook);
+        Runtime.getRuntime().removeShutdownHook(hook);
+      } catch (IllegalStateException e) {
+        // java.lang.Runtime.addShutdownHook and java.lang.Runtime.removeShutdownHook
+        // methods Javadoc specifies that IllegalStateException is thrown,
+        // if called after JVM shutdown started
+        return true;
+      } catch (Error e) {
+        // handling Error separately from other Throwable - Error should be propagated
+        throw e;
+      } catch (Throwable e) {
+        // handling other remaining Throwable, just in case
+        // we don't know the shutdown state here so returning false
+        return false;
+      }
+      return false;
     }
   }
 }
