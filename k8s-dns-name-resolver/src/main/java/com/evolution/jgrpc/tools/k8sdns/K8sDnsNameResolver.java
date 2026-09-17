@@ -102,8 +102,7 @@ import org.slf4j.LoggerFactory;
       resolveAllAsync(
           (addresses, err) -> {
             try {
-              if (this.isShuttingDown
-                  || err instanceof NameLookupState.LookupFailedJvmShutdownException) {
+              if (this.isShuttingDown || hasJvmLookupFailedOnJvmShutdown(err)) {
                 handleResolutionResultDuringShutdown();
               } else if (err != null) {
                 handleResolutionFailure(err);
@@ -174,7 +173,7 @@ import org.slf4j.LoggerFactory;
                 this.syncCtx.execute(
                     () -> {
                       if (err != null) {
-                        if (err instanceof NameLookupState.LookupFailedJvmShutdownException) {
+                        if (hasJvmLookupFailedOnJvmShutdown(err)) {
                           // lower the level below INFO if it's caused by JVM shutdown
                           // to keep the shutdown logs clean;
                           // the error log statement is not actionable in this case
@@ -198,5 +197,36 @@ import org.slf4j.LoggerFactory;
       throw new IllegalStateException("listener not set");
     }
     return this.listener;
+  }
+
+  /**
+   * Sometimes the actual exception on shutdown gets wrapped in a CompletionException, to harden the
+   * check, this method also looks into the cause:
+   *
+   * <pre>
+   * ERROR 2026-09-16 16:08:42,201 c.e.j.t.k.K8sDnsNameResolver - DNS lookup failed
+   * java.util.concurrent.CompletionException: com.evolution.jgrpc.tools.k8sdns.NameLookupState$LookupFailedJvmShutdownException
+   * 	at java.base/java.util.concurrent.CompletableFuture.encodeThrowable(CompletableFuture.java:332)
+   * 	at java.base/java.util.concurrent.CompletableFuture.uniApplyNow(CompletableFuture.java:674)
+   * 	at java.base/java.util.concurrent.CompletableFuture.uniApplyStage(CompletableFuture.java:662)
+   * 	at java.base/java.util.concurrent.CompletableFuture.thenApply(CompletableFuture.java:2200)
+   * 	at java.base/java.util.concurrent.CompletableFuture.thenApply(CompletableFuture.java:144)
+   * 	at com.evolution.jgrpc.tools.k8sdns.NameLookupState.lookupByAbsoluteName(NameLookupState.java:173)
+   * 	at com.evolution.jgrpc.tools.k8sdns.NameLookupState.runNextLookup(NameLookupState.java:107)
+   * 	at com.evolution.jgrpc.tools.k8sdns.K8sDnsNameResolver.resolveAllAsync(K8sDnsNameResolver.java:171)
+   * 	at com.evolution.jgrpc.tools.k8sdns.K8sDnsNameResolver.refreshInner(K8sDnsNameResolver.java:102)
+   * 	at io.grpc.SynchronizationContext$ManagedRunnable.run(SynchronizationContext.java:213)
+   * 	at io.grpc.SynchronizationContext.drain(SynchronizationContext.java:94)
+   * 	at io.grpc.SynchronizationContext.execute(SynchronizationContext.java:126)
+   * 	at io.grpc.SynchronizationContext$2.run(SynchronizationContext.java:184)
+   * 	at io.grpc.netty.shaded.io.netty.util.concurrent.PromiseTask.runTask(PromiseTask.java:98)
+   * 	at io.grpc.netty.shaded.io.netty.util.concurrent.ScheduledFutureTask.run(ScheduledFutureTask.java:159)
+   * 	at io.grpc.netty.shaded.io.netty.util.concurrent.AbstractEventExecutor.runTask(AbstractEventExecutor.java:173)
+   * </pre>
+   */
+  private boolean hasJvmLookupFailedOnJvmShutdown(@Nullable Throwable err) {
+    return err != null
+        && ((err instanceof NameLookupState.LookupFailedJvmShutdownException)
+            || (err.getCause() instanceof NameLookupState.LookupFailedJvmShutdownException));
   }
 }
