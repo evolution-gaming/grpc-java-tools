@@ -13,6 +13,24 @@ object Dependencies {
     val api = "io.grpc" % "grpc-api" % version
   }
 
+  object Netty {
+    private val version = "4.1.138.Final"
+
+    val all: Seq[ModuleID] = Seq(
+      "netty-buffer",
+      "netty-codec",
+      "netty-codec-http",
+      "netty-codec-http2",
+      "netty-codec-socks",
+      "netty-common",
+      "netty-handler",
+      "netty-handler-proxy",
+      "netty-resolver",
+      "netty-transport",
+      "netty-transport-native-unix-common",
+    ).map("io.netty" % _ % version)
+  }
+
   object Slf4j {
     private val version = "2.0.17"
 
