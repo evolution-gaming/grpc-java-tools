@@ -130,6 +130,7 @@ lazy val k8sDnsNameResolverIt = project.in(file("k8s-dns-name-resolver-it"))
       "com.thesamet.scalapb" %% "scalapb-runtime-grpc" % scalapb.compiler.Version.scalapbVersion,
       Testcontainers.core % Test,
     ),
+    dependencyOverrides ++= Netty.all,
   ).dependsOn(
     k8sDnsNameResolver,
   )
